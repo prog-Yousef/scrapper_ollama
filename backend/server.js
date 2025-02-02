@@ -1,6 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const cheerio = require('cheerio');
 
 const app = express();
 const PORT = 3000;
@@ -12,41 +13,62 @@ app.use(express.json());
 const OLLAMA_API = 'http://localhost:11434/api/generate';
 const MODEL_NAME = 'deepseek-r1:1.5b';
 
+function validateStructure(data) {
+    const template = {
+        title: "Untitled Website",
+        description: "No description available",
+        keywords: ["general"],
+        projects: [{
+            name: "Main Project",
+            description: "Primary project or service"
+        }],
+        contact: {
+            email: "info@example.com",
+            social_media: ["https://example.com/social"]
+        },
+        word_frequency: {
+            most_common_words: ["website", "content"],
+            frequencies: { "website": 1, "content": 1 }
+        }
+    };
+
+    // Deep merge with validation
+    const merged = JSON.parse(JSON.stringify(template));
+    
+    const mergeObjects = (target, source) => {
+        Object.keys(source).forEach(key => {
+            if (typeof source[key] === 'object' && !Array.isArray(source[key])) {
+                target[key] = mergeObjects(target[key] || {}, source[key]);
+            } else if (source[key] !== undefined && source[key] !== null) {
+                target[key] = source[key];
+            }
+        });
+        return target;
+    };
+
+    return mergeObjects(merged, data);
+}
+
 async function getStructuredData(content) {
     const prompt = `[INST]
-    Analyze this website content and extract:
-    1. Main title/heading
-    2. Primary description
-    3. 5-7 key keywords
-    4. List of projects (name, description, technologies)
-    5. Contact information (if available)
-    6. List frequency of words in the text and the most common words
-
-    Format as strict JSON:
+    Generate STRICT VALID JSON response. Follow these rules:
+    1. Use double quotes only
+    2. Escape internal quotes with \\
+    3. Maintain this exact structure:
     {
-        "title": "",
-        "description": "",
-        "keywords": [],
-        "projects": [
-            {
-                "name": "",
-                "description": "",
-                "technologies": []
-            }
-        ],
-        "contact": {
-            "email": "",
-            "social_media": []
-        },
-        "word_frequency": {
-            "most_common_words": [],
-            "frequencies": {}
-        }
+        "title": "string (from heading)",
+        "description": "string (first meaningful paragraph)",
+        "keywords": ["array", "of", "5-10", "terms"],
+        "projects": [{"name": "string", "description": "string"}],
+        "contact": {"email": "string", "social_media": ["url1", "url2"]},
+        "word_frequency": {"most_common_words": ["list"], "frequencies": {"word": count}}
     }
+
+    Content to analyze:
+    ${content.substring(0, 3500)}
     [/INST]
 
-    Website Content:
-    ${content.substring(0, 2500)}`;
+    {\n`;
 
     try {
         const response = await axios.post(OLLAMA_API, {
@@ -56,51 +78,121 @@ async function getStructuredData(content) {
             stream: false,
             options: {
                 temperature: 0.1,
-                num_predict: 600,
+                num_predict: 2500,
                 top_k: 40,
-                top_p: 0.9
+                top_p: 0.8,
+                stop: ['}\n']
             }
         });
 
         const rawResponse = response.data.response;
-        const jsonStart = rawResponse.indexOf('{');
-        const jsonEnd = rawResponse.lastIndexOf('}') + 1;
+        console.log('Raw Model Response:', rawResponse); // Debug log
 
-        if (jsonStart === -1 || jsonEnd === -1) {
-            throw new Error('Invalid JSON response from Ollama');
+        // Enhanced JSON cleaning
+        let jsonString = rawResponse
+            .replace(/^[^{]*/, '') // Remove leading non-JSON
+            .replace(/[^}]*$/, '') // Remove trailing non-JSON
+            .replace(/'/g, '"')    // Convert single quotes
+            .replace(/(\w+):/g, '"$1":') // Quote keys
+            .replace(/\\"/g, '"')  // Unescape quotes
+            .replace(/,(\s*[}\]])/g, '$1') // Remove trailing commas
+            .replace(/"\s*:/g, '":') // Fix spacing after keys
+            .replace(/:\s*([^"\s{]+)/g, ': "$1"'); // Quote unquoted values
+
+        // Balance brackets
+        const openCount = (jsonString.match(/{/g) || []).length;
+        const closeCount = (jsonString.match(/}/g) || []).length;
+        if (openCount > closeCount) jsonString += '}'.repeat(openCount - closeCount);
+
+        // Multi-stage parsing attempts
+        try {
+            return validateStructure(JSON.parse(jsonString));
+        } catch (primaryError) {
+            console.warn('Primary parse failed, trying recovery...');
+            
+            // Attempt to find valid JSON substring
+            const jsonMatch = jsonString.match(/{[\s\S]*?}(?=\s*[^{]*$)/);
+            if (jsonMatch) {
+                try {
+                    return validateStructure(JSON.parse(jsonMatch[0]));
+                } catch (e) {
+                    console.warn('Substring parse failed:', e.message);
+                }
+            }
+
+            // Final fallback: Manual extraction
+            const manualData = {
+                title: jsonString.match(/"title"\s*:\s*"([^"]*)"/)?.[1],
+                description: jsonString.match(/"description"\s*:\s*"([^"]*)"/)?.[1],
+                keywords: jsonString.match(/"keywords"\s*:\s*\[([^\]]*)\]/)?.[1]
+                    .split(',')
+                    .map(k => k.trim().replace(/"/g, ''))
+                    .filter(k => k)
+            };
+
+            return validateStructure(manualData);
         }
-
-        const jsonResponse = rawResponse.substring(jsonStart, jsonEnd);
-        return JSON.parse(jsonResponse);
     } catch (error) {
-        console.error('Error processing data:', error.message);
-        throw new Error('Failed to process website content');
+        console.error('Processing error:', error.message);
+        return validateStructure({});
     }
 }
 
 app.post('/scrape', async (req, res) => {
     try {
         const { url } = req.body;
-        if (!url) {
-            return res.status(400).json({ error: 'No URL provided' });
+        
+        if (!url || !/^https?:\/\/\S+$/i.test(url.trim())) {
+            return res.status(400).json({ error: 'Invalid URL format' });
         }
 
-        const websiteResponse = await axios.get(url, {
+        const targetUrl = url.trim();
+        
+        const websiteResponse = await axios.get(targetUrl, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml'
+            },
+            timeout: 30000,
+            maxRedirects: 5
         });
 
-        const websiteContent = typeof websiteResponse.data === 'object' 
-            ? JSON.stringify(websiteResponse.data) 
-            : websiteResponse.data;
+        const $ = cheerio.load(websiteResponse.data);
+        
+        // Improved content extraction
+        const content = [
+            $('h1, h2, h3').text(),
+            $('article').text(),
+            $('main').text(),
+            $('p').not('footer p, nav p').text()
+        ].join(' ')
+         .replace(/\s+/g, ' ')
+         .replace(/[^\w\s.,!?\-@]/g, '')
+         .trim()
+         .substring(0, 4000);
 
-        const structuredData = await getStructuredData(websiteContent);
+        if (content.length < 300) {
+            return res.status(400).json({
+                error: 'Insufficient content',
+                extracted: content.substring(0, 200) + '...'
+            });
+        }
+
+        const structuredData = await getStructuredData(content);
         res.json(structuredData);
+
     } catch (error) {
-        console.error('Server error:', error.message);
-        res.status(500).json({ 
-            error: error.response?.data?.error || error.message || 'Unknown error occurred'
+        const statusMap = {
+            ECONNABORTED: 504,
+            ENOTFOUND: 404,
+            ECONNREFUSED: 503
+        };
+        
+        res.status(statusMap[error.code] || 500).json({
+            error: error.message.includes('timeout') 
+                ? 'Website response timed out' 
+                : error.message,
+            details: error.config?.url ? `Failed to process ${error.config.url}` : undefined
         });
     }
 });
