@@ -15,7 +15,7 @@ app.use(express.json());
 app.use('/keywords', keywordTextRouter);
 
 const OLLAMA_API = 'http://localhost:11434/api/generate';
-const MODEL_NAME = 'deepseek-r1:8b';
+const MODEL_NAME = 'mistral:latest';
 
 function validateStructure(data) {
     const template = {
