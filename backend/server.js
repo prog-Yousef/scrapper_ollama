@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 const cheerio = require('cheerio');
+const keywordTextRouter = require('./routes/keyword-text.js');
 
 const app = express();
 const PORT = 3000;
@@ -10,8 +11,11 @@ const PORT = 3000;
 app.use(cors());
 app.use(express.json());
 
+// Routes
+app.use('/keywords', keywordTextRouter);
+
 const OLLAMA_API = 'http://localhost:11434/api/generate';
-const MODEL_NAME = 'deepseek-r1:1.5b';
+const MODEL_NAME = 'deepseek-r1:8b';
 
 function validateStructure(data) {
     const template = {
@@ -68,7 +72,7 @@ async function getStructuredData(content) {
     ${content.substring(0, 3500)}
     [/INST]
 
-    {\n`;
+}\n`;
 
     try {
         const response = await axios.post(OLLAMA_API, {
@@ -196,6 +200,8 @@ app.post('/scrape', async (req, res) => {
         });
     }
 });
+
+
 
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
