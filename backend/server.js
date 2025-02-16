@@ -50,25 +50,24 @@ function validateStructure(data) {
 }
 
 async function getStructuredData(content) {
+    // Fixed prompt: replace "count" with a valid number (0) and remove the extraneous trailing "{\n"
     const prompt = `[INST]
-    Generate STRICT VALID JSON response. Follow these rules:
-    1. Use double quotes only
-    2. Escape internal quotes with \\
-    3. Maintain this exact structure:
-    {
-        "title": "string (from heading)",
-        "description": "string (first meaningful paragraph)",
-        "keywords": ["array", "of", "5-10", "terms"],
-        "projects": [{"name": "string", "description": "string"}],
-        "contact": {"email": "string", "social_media": ["url1", "url2"]},
-        "word_frequency": {"most_common_words": ["list"], "frequencies": {"word": count}}
-    }
+Generate STRICT VALID JSON response. Follow these rules:
+1. Use double quotes only.
+2. Escape internal quotes with \\.
+3. Maintain this exact structure:
+{
+    "title": "string (from heading)",
+    "description": "string (first meaningful paragraph)",
+    "keywords": ["array", "of", "5-10", "terms"],
+    "projects": [{"name": "string", "description": "string"}],
+    "contact": {"email": "string", "social_media": ["url1", "url2"]},
+    "word_frequency": {"most_common_words": ["list"], "frequencies": {"word": 0}}
+}
 
-    Content to analyze:
-    ${content.substring(0, 3500)}
-    [/INST]
-
-    {\n`;
+Content to analyze:
+${content.substring(0, 3500)}
+[/INST]`;
 
     try {
         const response = await axios.post(OLLAMA_API, {
@@ -88,29 +87,31 @@ async function getStructuredData(content) {
         const rawResponse = response.data.response;
         console.log('Raw Model Response:', rawResponse); // Debug log
 
-        // Enhanced JSON cleaning
+        // Enhanced JSON cleaning: capture the JSON block from first "{" to last "}"
         let jsonString = rawResponse
-            .replace(/^[^{]*/, '') // Remove leading non-JSON
-            .replace(/[^}]*$/, '') // Remove trailing non-JSON
-            .replace(/'/g, '"')    // Convert single quotes
-            .replace(/(\w+):/g, '"$1":') // Quote keys
-            .replace(/\\"/g, '"')  // Unescape quotes
-            .replace(/,(\s*[}\]])/g, '$1') // Remove trailing commas
-            .replace(/"\s*:/g, '":') // Fix spacing after keys
-            .replace(/:\s*([^"\s{]+)/g, ': "$1"'); // Quote unquoted values
+            .replace(/^[^{]*/, '')   // Remove leading non-JSON characters
+            .replace(/[^}]*$/, '');   // Remove trailing non-JSON characters
+
+        // Optionally, if your model sometimes uses single quotes, convert them
+        jsonString = jsonString
+            .replace(/'/g, '"')
+            .replace(/(\w+):/g, '"$1":')  // Ensure all keys are quoted
+            .replace(/,(\s*[}\]])/g, '$1'); // Remove trailing commas
 
         // Balance brackets
         const openCount = (jsonString.match(/{/g) || []).length;
         const closeCount = (jsonString.match(/}/g) || []).length;
-        if (openCount > closeCount) jsonString += '}'.repeat(openCount - closeCount);
+        if (openCount > closeCount) {
+            jsonString += '}'.repeat(openCount - closeCount);
+        }
 
         // Multi-stage parsing attempts
         try {
             return validateStructure(JSON.parse(jsonString));
         } catch (primaryError) {
-            console.warn('Primary parse failed, trying recovery...');
+            console.warn('Primary parse failed, trying recovery...', primaryError.message);
             
-            // Attempt to find valid JSON substring
+            // Attempt to find a valid JSON substring
             const jsonMatch = jsonString.match(/{[\s\S]*?}(?=\s*[^{]*$)/);
             if (jsonMatch) {
                 try {
@@ -120,14 +121,16 @@ async function getStructuredData(content) {
                 }
             }
 
-            // Final fallback: Manual extraction
+            // Final fallback: Manual extraction (ensure defaults if regex fails)
             const manualData = {
-                title: jsonString.match(/"title"\s*:\s*"([^"]*)"/)?.[1],
-                description: jsonString.match(/"description"\s*:\s*"([^"]*)"/)?.[1],
-                keywords: jsonString.match(/"keywords"\s*:\s*\[([^\]]*)\]/)?.[1]
-                    .split(',')
-                    .map(k => k.trim().replace(/"/g, ''))
-                    .filter(k => k)
+                title: (jsonString.match(/"title"\s*:\s*"([^"]*)"/) || [])[1] || "",
+                description: (jsonString.match(/"description"\s*:\s*"([^"]*)"/) || [])[1] || "",
+                keywords: (jsonString.match(/"keywords"\s*:\s*\[([^\]]*)\]/) || [])[1]
+                    ? (jsonString.match(/"keywords"\s*:\s*\[([^\]]*)\]/)[1]
+                        .split(',')
+                        .map(k => k.trim().replace(/"/g, ''))
+                        .filter(k => k))
+                    : []
             };
 
             return validateStructure(manualData);
