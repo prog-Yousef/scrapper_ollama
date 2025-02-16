@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import axios from 'axios';
-import ReactJson from 'react-json-view';
+import { JsonView } from 'react-json-view-lite';
+import 'react-json-view-lite/dist/index.css';  // Lägg till denna import
 import './App.css';
 
 const App = () => {
@@ -68,12 +69,9 @@ const App = () => {
 
           <details className="json-viewer">
             <summary>View Raw Data</summary>
-            <ReactJson
-              src={result}
-              theme="monokai"
-              displayDataTypes={false}
-              collapsed={true}
-              style={{ padding: '1rem' }}
+            <JsonView 
+              data={result}  // ändrat från src till data
+              style={{ backgroundColor: '#fff', padding: '1rem' }}  // monokai-liknande bakgrund
             />
           </details>
         </div>

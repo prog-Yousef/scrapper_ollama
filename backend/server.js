@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 const cheerio = require('cheerio');
+const keywordTextRouter = require('./routes/keyword-text.js');
 
 const app = express();
 const PORT = 3000;
@@ -10,8 +11,11 @@ const PORT = 3000;
 app.use(cors());
 app.use(express.json());
 
+// Routes
+app.use('/keywords', keywordTextRouter);
+
 const OLLAMA_API = 'http://localhost:11434/api/generate';
-const MODEL_NAME = 'deepseek-r1:1.5b';
+const MODEL_NAME = 'mistral:latest';
 
 function validateStructure(data) {
     const template = {
@@ -65,9 +69,17 @@ Generate STRICT VALID JSON response. Follow these rules:
     "word_frequency": {"most_common_words": ["list"], "frequencies": {"word": 0}}
 }
 
+<<<<<<< HEAD
 Content to analyze:
 ${content.substring(0, 3500)}
 [/INST]`;
+=======
+    Content to analyze:
+    ${content.substring(0, 3500)}
+    [/INST]
+
+}\n`;
+>>>>>>> origin/dev
 
     try {
         const response = await axios.post(OLLAMA_API, {
@@ -199,6 +211,8 @@ app.post('/scrape', async (req, res) => {
         });
     }
 });
+
+
 
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
